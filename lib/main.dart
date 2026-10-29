@@ -106,6 +106,10 @@ Widget netImage(String url, {BoxFit fit = BoxFit.cover}) =>
       url,
       fit: fit,
       webHtmlElementStrategy: WebHtmlElementStrategy.prefer,
+      // Görsel gelene kadar yükleniyor göstergesi.
+      frameBuilder: (_, child, frame, sync) => sync || frame != null
+          ? child
+          : const Center(child: CircularProgressIndicator()),
       errorBuilder: (_, _, _) => const Icon(Icons.broken_image),
     );
 
@@ -198,11 +202,14 @@ class _HomePageState extends State<HomePage> {
             return const Center(child: CircularProgressIndicator());
           }
           final art = snap.data!;
+          // stretch: Column ekran genişliğini kaplar, içerik ortada kalır.
           return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                child: Text(_daily ? 'Günün Tablosu' : 'Rastgele Tablo', style: text.titleLarge),
+                child: Text(_daily ? 'Günün Tablosu' : 'Rastgele Tablo',
+                    textAlign: TextAlign.center, style: text.titleLarge),
               ),
               Expanded(
                 child: GestureDetector(
@@ -245,12 +252,6 @@ class _HomePageState extends State<HomePage> {
                       ),
                       icon: const Icon(Icons.grid_view),
                       label: const Text('Tüm tablolar'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: () =>
-                          launchUrl(Uri.parse(art.printUrl), webOnlyWindowName: '_blank'),
-                      icon: const Icon(Icons.open_in_new),
-                      label: const Text('Yeni sekmede aç'),
                     ),
                   ],
                 ),
@@ -422,6 +423,15 @@ class ArtDetailPage extends StatelessWidget {
         _row('Teknik', art.medium),
         _row('Boyut', art.dimensions),
         _row('Köken', art.origin),
+        const SizedBox(height: 16),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: FilledButton.icon(
+            onPressed: () => launchUrl(Uri.parse(art.printUrl), webOnlyWindowName: '_blank'),
+            icon: const Icon(Icons.open_in_new),
+            label: const Text('Yeni sekmede aç'),
+          ),
+        ),
         if (art.description.isNotEmpty) ...[
           const SizedBox(height: 16),
           Text(art.description),
