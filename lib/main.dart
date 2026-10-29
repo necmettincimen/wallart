@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 
 void main() => runApp(const WallArtApp());
 
@@ -42,7 +44,7 @@ class WallArtApp extends StatelessWidget {
         theme: _theme(Brightness.light),
         darkTheme: _theme(Brightness.dark),
         themeMode: mode,
-        home: const ArtListPage(),
+        home: const HomePage(),
       ),
     );
   }
@@ -110,17 +112,155 @@ Widget netImage(String url, {BoxFit fit = BoxFit.cover}) =>
 const _fields =
     'id,title,creators,creation_date,technique,measurements,culture,description,images';
 
-Future<List<Artwork>> fetchArtworks(int page) async {
+Future<Map<String, dynamic>> _query(int limit, int skip) async {
   final uri = Uri.parse(
       'https://openaccess-api.clevelandart.org/api/artworks/?has_image=1&type=Painting'
-      '&fields=$_fields&limit=30&skip=${(page - 1) * 30}');
+      '&fields=$_fields&limit=$limit&skip=$skip');
   final res = await http.get(uri);
   if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
-  final data = jsonDecode(res.body)['data'] as List;
+  return jsonDecode(res.body);
+}
+
+Future<List<Artwork>> fetchArtworks(int page) async {
+  final data = (await _query(30, (page - 1) * 30))['data'] as List;
   return data
       .map((e) => Artwork.fromJson(e))
       .where((a) => a.webUrl.isNotEmpty)
       .toList();
+}
+
+/// Koleksiyonda ~3900 tablo var; sayıyı sabit tutmak açılışta fazladan
+/// bir sıralı isteği önler.
+const _collectionSize = 3900;
+
+Future<Artwork> fetchArtworkAt(int index) async =>
+    Artwork.fromJson(((await _query(1, index))['data'] as List).first);
+
+/// Tarihe göre sabit sıra: aynı gün herkes aynı tabloyu görür.
+Future<Artwork> fetchDailyArtwork() {
+  final now = DateTime.now();
+  final day = DateTime.utc(now.year, now.month, now.day)
+      .difference(DateTime.utc(2000))
+      .inDays;
+  // Ardışık günlerde benzer eserler gelmesin diye asal sayıyla dağıtılır.
+  return fetchArtworkAt(day * 7919 % _collectionSize);
+}
+
+Future<Artwork> fetchRandomArtwork() =>
+    fetchArtworkAt(Random().nextInt(_collectionSize));
+
+/// Görseli en yüksek çözünürlükte yeni sekmede açar.
+class OpenImageButton extends StatelessWidget {
+  final Artwork art;
+  const OpenImageButton({super.key, required this.art});
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+        tooltip: 'Yeni sekmede aç',
+        icon: const Icon(Icons.open_in_new),
+        onPressed: () => launchUrl(Uri.parse(art.printUrl), webOnlyWindowName: '_blank'),
+      );
+}
+
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  late Future<Artwork> _art = fetchDailyArtwork();
+  bool _daily = true;
+
+  void _show(Future<Artwork> art, bool daily) => setState(() {
+        _art = art;
+        _daily = daily;
+      });
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Scaffold(
+      appBar: AppBar(title: const Text('WallArt'), actions: const [ThemeToggle()]),
+      body: FutureBuilder<Artwork>(
+        future: _art,
+        builder: (context, snap) {
+          if (snap.hasError) {
+            return Center(
+              child: TextButton(
+                onPressed: () => _show(_daily ? fetchDailyArtwork() : fetchRandomArtwork(), _daily),
+                child: Text('Tekrar dene\n${snap.error}'),
+              ),
+            );
+          }
+          if (!snap.hasData || snap.connectionState != ConnectionState.done) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final art = snap.data!;
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: Text(_daily ? 'Günün Tablosu' : 'Rastgele Tablo', style: text.titleLarge),
+              ),
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => ArtDetailPage(art: art)),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Hero(tag: art.id, child: netImage(art.webUrl, fit: BoxFit.contain)),
+                  ),
+                ),
+              ),
+              Text(art.title,
+                  textAlign: TextAlign.center, style: text.titleMedium, maxLines: 2),
+              Text(art.artist.split('\n').first,
+                  textAlign: TextAlign.center, style: text.bodyMedium),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: () => _show(fetchRandomArtwork(), false),
+                      icon: const Icon(Icons.shuffle),
+                      label: const Text('Rastgele'),
+                    ),
+                    if (!_daily)
+                      OutlinedButton.icon(
+                        onPressed: () => _show(fetchDailyArtwork(), true),
+                        icon: const Icon(Icons.today),
+                        label: const Text('Günün tablosu'),
+                      ),
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const ArtListPage()),
+                      ),
+                      icon: const Icon(Icons.grid_view),
+                      label: const Text('Tüm tablolar'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () =>
+                          launchUrl(Uri.parse(art.printUrl), webOnlyWindowName: '_blank'),
+                      icon: const Icon(Icons.open_in_new),
+                      label: const Text('Yeni sekmede aç'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
 }
 
 class ArtListPage extends StatefulWidget {
@@ -292,7 +432,7 @@ class ArtDetailPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(art.title, overflow: TextOverflow.ellipsis),
-        actions: const [ThemeToggle()],
+        actions: [OpenImageButton(art: art), const ThemeToggle()],
       ),
       body: wide
           ? Row(children: [
