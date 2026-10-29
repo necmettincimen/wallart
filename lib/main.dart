@@ -5,20 +5,59 @@ import 'package:http/http.dart' as http;
 
 void main() => runApp(const WallArtApp());
 
+/// Varsayılan sistem teması; AppBar'daki düğme açık/koyu arasında geçiş yapar.
+final themeMode = ValueNotifier(ThemeMode.system);
+
+ThemeData _theme(Brightness b) {
+  final dark = b == Brightness.dark;
+  final bg = dark ? Colors.black : Colors.white;
+  final fg = dark ? Colors.white : Colors.black;
+  return ThemeData(
+    useMaterial3: true,
+    brightness: b,
+    scaffoldBackgroundColor: bg,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: Colors.grey,
+      brightness: b,
+      dynamicSchemeVariant: DynamicSchemeVariant.monochrome,
+      surface: bg,
+      onSurface: fg,
+      primary: fg,
+    ),
+    appBarTheme: AppBarTheme(backgroundColor: bg, foregroundColor: fg),
+    cardTheme: CardThemeData(color: dark ? Colors.grey.shade900 : Colors.grey.shade200),
+  );
+}
+
 class WallArtApp extends StatelessWidget {
   const WallArtApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'WallArt',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorSchemeSeed: Colors.brown,
-        brightness: Brightness.dark,
-        useMaterial3: true,
+    return ValueListenableBuilder(
+      valueListenable: themeMode,
+      builder: (context, mode, _) => MaterialApp(
+        title: 'WallArt',
+        debugShowCheckedModeBanner: false,
+        theme: _theme(Brightness.light),
+        darkTheme: _theme(Brightness.dark),
+        themeMode: mode,
+        home: const ArtListPage(),
       ),
-      home: const ArtListPage(),
+    );
+  }
+}
+
+class ThemeToggle extends StatelessWidget {
+  const ThemeToggle({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return IconButton(
+      tooltip: dark ? 'Açık tema' : 'Koyu tema',
+      icon: Icon(dark ? Icons.light_mode : Icons.dark_mode),
+      onPressed: () => themeMode.value = dark ? ThemeMode.light : ThemeMode.dark,
     );
   }
 }
@@ -58,13 +97,13 @@ class Artwork {
       logicalWidth * MediaQuery.devicePixelRatioOf(context) > 800 ? printUrl : webUrl;
 }
 
-/// CDN CORS başlığı göndermediği için web'de <img> elemanına düşülür.
-Widget netImage(String url, {BoxFit fit = BoxFit.cover, ImageLoadingBuilder? loadingBuilder}) =>
+/// CDN CORS başlığı göndermediği için web'de doğrudan <img> elemanı kullanılır;
+/// önce XHR denenmediğinden konsolda CORS hatası oluşmaz.
+Widget netImage(String url, {BoxFit fit = BoxFit.cover}) =>
     Image.network(
       url,
       fit: fit,
-      loadingBuilder: loadingBuilder,
-      webHtmlElementStrategy: WebHtmlElementStrategy.fallback,
+      webHtmlElementStrategy: WebHtmlElementStrategy.prefer,
       errorBuilder: (_, _, _) => const Icon(Icons.broken_image),
     );
 
@@ -139,7 +178,7 @@ class _ArtListPageState extends State<ArtListPage> {
     final columns = (width / 260).floor().clamp(2, 8);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('WallArt')),
+      appBar: AppBar(title: const Text('WallArt'), actions: const [ThemeToggle()]),
       body: _items.isEmpty && _error != null
           ? Center(
               child: TextButton(onPressed: _load, child: Text('Tekrar dene\n$_error')))
@@ -221,14 +260,12 @@ class ArtDetailPage extends StatelessWidget {
       tag: art.id,
       child: InteractiveViewer(
         maxScale: 5,
-        child: netImage(
-          art.imageUrl(context, wide ? size.width * 0.6 : size.width),
-          fit: BoxFit.contain,
-          // Büyük görsel gelene kadar küçük web görseli gösterilir.
-          loadingBuilder: (context, child, progress) => progress == null
-              ? child
-              : netImage(art.webUrl, fit: BoxFit.contain),
-        ),
+        // Büyük görsel gelene kadar alttaki küçük web görseli görünür.
+        child: Stack(fit: StackFit.expand, children: [
+          netImage(art.webUrl, fit: BoxFit.contain),
+          netImage(art.imageUrl(context, wide ? size.width * 0.6 : size.width),
+              fit: BoxFit.contain),
+        ]),
       ),
     );
 
@@ -253,7 +290,10 @@ class ArtDetailPage extends StatelessWidget {
     );
 
     return Scaffold(
-      appBar: AppBar(title: Text(art.title, overflow: TextOverflow.ellipsis)),
+      appBar: AppBar(
+        title: Text(art.title, overflow: TextOverflow.ellipsis),
+        actions: const [ThemeToggle()],
+      ),
       body: wide
           ? Row(children: [
               Expanded(flex: 3, child: image),
