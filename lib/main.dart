@@ -44,7 +44,7 @@ class WallArtApp extends StatelessWidget {
         theme: _theme(Brightness.light),
         darkTheme: _theme(Brightness.dark),
         themeMode: mode,
-        home: const HomePage(),
+        home: const ArtListPage(),
       ),
     );
   }
@@ -133,22 +133,11 @@ Future<List<Artwork>> fetchArtworks(int page) async {
       .toList();
 }
 
-/// Koleksiyonda ~3900 tablo var; sayıyı sabit tutmak açılışta fazladan
-/// bir sıralı isteği önler.
+/// Koleksiyonda ~3900 tablo var; sayıyı sabit tutmak fazladan bir isteği önler.
 const _collectionSize = 3900;
 
 Future<Artwork> fetchArtworkAt(int index) async =>
     Artwork.fromJson(((await _query(1, index))['data'] as List).first);
-
-/// Tarihe göre sabit sıra: aynı gün herkes aynı tabloyu görür.
-Future<Artwork> fetchDailyArtwork() {
-  final now = DateTime.now();
-  final day = DateTime.utc(now.year, now.month, now.day)
-      .difference(DateTime.utc(2000))
-      .inDays;
-  // Ardışık günlerde benzer eserler gelmesin diye asal sayıyla dağıtılır.
-  return fetchArtworkAt(day * 7919 % _collectionSize);
-}
 
 Future<Artwork> fetchRandomArtwork() =>
     fetchArtworkAt(Random().nextInt(_collectionSize));
@@ -166,104 +155,49 @@ class OpenImageButton extends StatelessWidget {
       );
 }
 
-class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+/// Tabloyu yükleyip detayını gösterir; "Rastgele"de yeni bir tablo getirir.
+class ArtLoaderPage extends StatefulWidget {
+  final Future<Artwork> Function() load;
+  const ArtLoaderPage({super.key, required this.load});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  State<ArtLoaderPage> createState() => _ArtLoaderPageState();
 }
 
-class _HomePageState extends State<HomePage> {
-  late Future<Artwork> _art = fetchDailyArtwork();
-  bool _daily = true;
-
-  void _show(Future<Artwork> art, bool daily) => setState(() {
-        _art = art;
-        _daily = daily;
-      });
+class _ArtLoaderPageState extends State<ArtLoaderPage> {
+  late Future<Artwork> _art = widget.load();
 
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    return Scaffold(
-      appBar: AppBar(title: const Text('WallArt'), actions: const [ThemeToggle()]),
-      body: FutureBuilder<Artwork>(
-        future: _art,
-        builder: (context, snap) {
-          if (snap.hasError) {
-            return Center(
-              child: TextButton(
-                onPressed: () => _show(_daily ? fetchDailyArtwork() : fetchRandomArtwork(), _daily),
-                child: Text('Tekrar dene\n${snap.error}'),
-              ),
-            );
-          }
-          if (!snap.hasData || snap.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final art = snap.data!;
-          // stretch: Column ekran genişliğini kaplar, içerik ortada kalır.
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                child: Text(_daily ? 'Günün Tablosu' : 'Rastgele Tablo',
-                    textAlign: TextAlign.center, style: text.titleLarge),
-              ),
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => ArtDetailPage(art: art)),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Hero(tag: art.id, child: netImage(art.webUrl, fit: BoxFit.contain)),
-                  ),
-                ),
-              ),
-              Text(art.title,
-                  textAlign: TextAlign.center, style: text.titleMedium, maxLines: 2),
-              Text(art.artist.split('\n').first,
-                  textAlign: TextAlign.center, style: text.bodyMedium),
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Wrap(
-                  spacing: 12,
-                  runSpacing: 8,
-                  alignment: WrapAlignment.center,
-                  children: [
-                    FilledButton.icon(
-                      onPressed: () => _show(fetchRandomArtwork(), false),
-                      icon: const Icon(Icons.shuffle),
-                      label: const Text('Rastgele'),
-                    ),
-                    if (!_daily)
-                      OutlinedButton.icon(
-                        onPressed: () => _show(fetchDailyArtwork(), true),
-                        icon: const Icon(Icons.today),
-                        label: const Text('Günün tablosu'),
-                      ),
-                    OutlinedButton.icon(
-                      onPressed: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const ArtListPage()),
-                      ),
-                      icon: const Icon(Icons.grid_view),
-                      label: const Text('Tüm tablolar'),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+    return FutureBuilder<Artwork>(
+      future: _art,
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.done && snap.hasData) {
+          return ArtDetailPage(
+            art: snap.data!,
+            onRandom: () => setState(() => _art = widget.load()),
           );
-        },
-      ),
+        }
+        return Scaffold(
+          appBar: AppBar(actions: const [ThemeToggle()]),
+          body: Center(
+            child: snap.hasError
+                ? TextButton(
+                    onPressed: () => setState(() => _art = widget.load()),
+                    child: Text('Tekrar dene\n${snap.error}'),
+                  )
+                : const CircularProgressIndicator(),
+          ),
+        );
+      },
     );
   }
 }
 
+void openRandom(BuildContext context) => Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ArtLoaderPage(load: fetchRandomArtwork)),
+    );
 class ArtListPage extends StatefulWidget {
   const ArtListPage({super.key});
 
@@ -319,7 +253,14 @@ class _ArtListPageState extends State<ArtListPage> {
     final columns = (width / 260).floor().clamp(2, 8);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('WallArt'), actions: const [ThemeToggle()]),
+      appBar: AppBar(title: const Text('WallArt'), actions: [
+        TextButton.icon(
+          onPressed: () => openRandom(context),
+          icon: const Icon(Icons.shuffle),
+          label: const Text('Rastgele'),
+        ),
+        const ThemeToggle(),
+      ]),
       body: _items.isEmpty && _error != null
           ? Center(
               child: TextButton(onPressed: _load, child: Text('Tekrar dene\n$_error')))
@@ -390,7 +331,10 @@ class _ArtTile extends StatelessWidget {
 
 class ArtDetailPage extends StatelessWidget {
   final Artwork art;
-  const ArtDetailPage({super.key, required this.art});
+
+  /// Verilirse AppBar'da başka bir rastgele tablo getiren düğme çıkar.
+  final VoidCallback? onRandom;
+  const ArtDetailPage({super.key, required this.art, this.onRandom});
 
   @override
   Widget build(BuildContext context) {
@@ -442,7 +386,12 @@ class ArtDetailPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(art.title, overflow: TextOverflow.ellipsis),
-        actions: [OpenImageButton(art: art), const ThemeToggle()],
+        actions: [
+          if (onRandom != null)
+            IconButton(tooltip: 'Başka rastgele', icon: const Icon(Icons.shuffle), onPressed: onRandom),
+          OpenImageButton(art: art),
+          const ThemeToggle(),
+        ],
       ),
       body: wide
           ? Row(children: [
